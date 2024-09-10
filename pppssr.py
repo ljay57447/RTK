@@ -4,16 +4,13 @@ module for standard PPP positioning
 
 import numpy as np
 
-from cssrlib.ephemeris import satposs
-from cssrlib.gnss import sat2id, sat2prn, rSigRnx, uTYP, uGNSS, rCST
-from cssrlib.gnss import uTropoModel, ecef2pos, tropmodel, geodist, satazel
-from cssrlib.gnss import time2str, timediff, gpst2utc, tropmapf, uIonoModel
-from cssrlib.ppp import tidedisp, tidedispIERS2010, uTideModel
-from cssrlib.ppp import shapiro, windupcorr
-from cssrlib.peph import antModelRx, antModelTx
-from cssrlib.cssrlib import sCType
-from cssrlib.cssrlib import sCSSRTYPE as sc
-from cssrlib.mlambda import mlambda
+from ephemeris import satposs
+from gnss import sat2id, sat2prn, rSigRnx, uTYP, uGNSS, rCST
+from gnss import uTropoModel, ecef2pos, tropmodel, geodist, satazel
+from gnss import time2str, timediff, gpst2utc, tropmapf, uIonoModel
+from cssrlib import sCType
+from cssrlib import sCSSRTYPE as sc
+from mlambda import mlambda
 
 # format definition for logging
 fmt_ztd = "{}         ztd      ({:3d},{:3d}) {:10.3f} {:10.3f} {:10.3f}\n"
@@ -113,8 +110,6 @@ class pppos():
 
         # Processing options
         #
-        self.nav.tidecorr = uTideModel.IERS2010
-        # self.nav.tidecorr = uTideModel.SIMPLE
         self.nav.thresar = 3.0  # AR acceptance threshold
         # 0:float-ppp,1:continuous,2:instantaneous,3:fix-and-hold
         self.nav.armode = 0
@@ -447,6 +442,14 @@ class pppos():
             elif sig.toAtt('X') in sigc.keys():
                 v[k] = sigc[sig.toAtt('X')]
         return v
+    
+    def shapiro(rsat, rrcv):
+        """ relativistic shapiro effect """
+        rs = np.linalg.norm(rsat)
+        rr = np.linalg.norm(rrcv)
+        rrs = np.linalg.norm(rsat-rrcv)
+        corr = (2*gn.rCST.GME/gn.rCST.CLIGHT**2)*np.log((rs+rr+rrs)/(rs+rr-rrs))
+        return corr
 
     def zdres(self, obs, cs, bsx, rs, vs, dts, rr, rtype=1):
         """ non-differential residual """
@@ -460,18 +463,6 @@ class pppos():
         el = np.zeros(n)
         e = np.zeros((n, 3))
         rr_ = rr.copy()
-
-        # Solid Earth tide corrections
-        #
-        if self.nav.tidecorr == uTideModel.SIMPLE:
-            pos = ecef2pos(rr_)
-            disp = tidedisp(gpst2utc(obs.t), pos)
-        elif self.nav.tidecorr == uTideModel.IERS2010:
-            pos = ecef2pos(rr_)
-            disp = tidedispIERS2010(gpst2utc(obs.t), pos)
-        else:
-            disp = np.zeros(3)
-        rr_ += disp
 
         # Geodetic position
         #
@@ -580,7 +571,7 @@ class pppos():
 
             # Shapiro relativistic effect
             #
-            relatv = shapiro(rs[i, :], rr_)
+            relatv = self.shapiro(rs[i, :], rr_)
 
             # Tropospheric delay mapping functions
             #
@@ -600,19 +591,6 @@ class pppos():
                 iono = np.array([40.3e16/(f*f)*stec[idx_l] for f in frq])
             else:
                 iono = np.zeros(nf)
-
-            # Phase wind-up effect
-            #
-            if self.nav.phw_opt > 0:
-                phw_mode = (False if self.nav.phw_opt == 2 else True)
-                self.nav.phw[sat-1] = windupcorr(obs.t, rs[i, :], vs[i, :],
-                                                 rr_, self.nav.phw[sat-1],
-                                                 full=phw_mode)
-
-                # cycle -> m
-                phw = lam*self.nav.phw[sat-1]
-            else:
-                phw = np.zeros(nf)
 
             # Select APC reference signals
             #
@@ -657,45 +635,10 @@ class pppos():
                     elif sys == uGNSS.BDS:
                         sig0 = (rSigRnx("CC6I"),)
 
-            # Receiver/satellite antenna offset
-            #
-            antrPR = antModelRx(self.nav, pos, e[i, :], sigsPR, rtype)
-            antrCP = antModelRx(self.nav, pos, e[i, :], sigsCP, rtype)
-
-            if self.nav.ephopt == 4:
-
-                antsPR = antModelTx(
-                    self.nav, e[i, :], sigsPR, sat, obs.t, rs[i, :])
-                antsCP = antModelTx(
-                    self.nav, e[i, :], sigsCP, sat, obs.t, rs[i, :])
-
-            elif cs is not None and cs.cssrmode in (sc.QZS_MADOCA,
-                                                    sc.GAL_HAS_SIS,
-                                                    sc.GAL_HAS_IDD,
-                                                    sc.IGS_SSR,
-                                                    sc.RTCM3_SSR,
-                                                    sc.BDS_PPP):
-
-                antsPR = antModelTx(self.nav, e[i, :], sigsPR,
-                                    sat, obs.t, rs[i, :], sig0)
-                antsCP = antModelTx(self.nav, e[i, :], sigsCP,
-                                    sat, obs.t, rs[i, :], sig0)
-
-            else:
-
-                antsPR = [0.0 for _ in sigsPR]
-                antsCP = [0.0 for _ in sigsCP]
-
-            # Check for invalid values
-            #
-            if antrPR is None or antrCP is None or \
-               antsPR is None or antsCP is None:
-                continue
-
             # Range correction
             #
-            prc[i, :] = trop + antrPR + antsPR + iono - cbias
-            cpc[i, :] = trop + antrCP + antsCP - iono - pbias + phw
+            prc[i, :] = trop + iono - cbias
+            cpc[i, :] = trop - iono - pbias
 
             r += relatv - _c*dts[i]
 
@@ -1121,17 +1064,6 @@ class pppos():
         else:
             rr_ = rr
 
-        # Solid Earth tide corrections
-        #
-        if self.nav.tidecorr == uTideModel.SIMPLE:
-            pos = ecef2pos(rr_)
-            disp = tidedisp(gpst2utc(obs.t), pos)
-        elif self.nav.tidecorr == uTideModel.IERS2010:
-            pos = ecef2pos(rr_)
-            disp = tidedispIERS2010(gpst2utc(obs.t), pos)
-        else:
-            disp = np.zeros(3)
-        rr_ += disp
 
         # Geodetic position
         #

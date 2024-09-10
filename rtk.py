@@ -3,10 +3,10 @@ module for RTK positioning
 
 """
 
-from cssrlib.pppssr import pppos
+from pppssr import pppos
 import numpy as np
 from copy import deepcopy
-from cssrlib.ephemeris import satposs
+from ephemeris import satposs
 
 
 class rtkpos(pppos):

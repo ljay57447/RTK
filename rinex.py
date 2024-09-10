@@ -6,9 +6,9 @@ import numpy as np
 from gnss import uGNSS, uTYP, rSigRnx
 from gnss import bdt2gpst, time2bdt
 from gnss import gpst2time, bdt2time, epoch2time, timediff, gtime_t
-from gnss import prn2sat, char2sys, timeget, utc2gpst, time2epoch
-from gnss import Eph, Geph, Obs, sat2id, sat2prn, gpst2bdt, time2gpst
-from gnss import timeadd, id2sat, gpst2utc
+from gnss import prn2sat, char2sys, utc2gpst
+from gnss import Eph, Geph, Obs, time2gpst
+from gnss import timeadd, id2sat
 
 
 
